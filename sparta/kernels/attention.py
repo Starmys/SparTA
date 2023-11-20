@@ -29,8 +29,7 @@ class FlashSparseAttentionKernel(KernelBase):
     __dtype__ = ''
     __direction__ = ''
 
-    def __init__(self, buffer: torch.Tensor, transposed: bool = False):
-        self._buffer = buffer
+    def __init__(self, transposed: bool = False):
         self._transposed = transposed
         super().__init__()
 
@@ -63,7 +62,6 @@ class FlashSparseAttentionKernel(KernelBase):
         """Calc shared memory size in bytes."""
 
     def get_kernel_code(self):
-        self._buffer.to()
         template_file = f'{self.__algo__}_sparse_attention_{self.__direction__}_{self.__dtype__}.cuh.j2'
         kernel_template = res.read_text(templates, template_file)
         with open('tmp.cu', 'w') as f:
@@ -204,11 +202,10 @@ class FlashSparseAttentionForwardKernel(FlashSparseAttentionKernel):
         shared = self._calc_shared_mem_size(Bs, Bt, D)
         self._kernel.set_attribute(function_attribute.MAX_DYNAMIC_SHARED_SIZE_BYTES, shared)
 
-        def attn_func(Q, K, V):
+        def attn_func(Q, K, V, buffer):
             O = torch.zeros_like(Q)
-            self._buffer.fill_(0)  # TODO: try BCSR and delete this
             self._kernel(
-                Q, K, V, O, self._buffer,
+                Q, K, V, O, buffer,
                 self.attr.indexes.BCSC_idx,
                 Ns_32, Nt_32,  # D_32,
                 self.attr.indexes.nnz,
@@ -243,12 +240,12 @@ class FlashSparseAttentionBackwardKernel(FlashSparseAttentionKernel):
         shared = self._calc_shared_mem_size(Bs, Bt, D)
         self._kernel.set_attribute(function_attribute.MAX_DYNAMIC_SHARED_SIZE_BYTES, shared)
 
-        def attn_func(grad, O, Q, K, V):
+        def attn_func(grad, O, Q, K, V, buffer):
             grad_Q = torch.zeros_like(Q)
             grad_K = torch.zeros_like(Q)
             grad_V = torch.zeros_like(Q)
             self._kernel(
-                Q, K, V, O, grad_Q, grad_K, grad_V, grad, self._buffer,
+                Q, K, V, O, grad_Q, grad_K, grad_V, grad, buffer,
                 self.attr.indexes.BCSC_idx,
                 Ns_32, Nt_32,  # D_32,
                 self.attr.indexes.nnz,
